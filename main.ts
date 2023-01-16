@@ -1,4 +1,5 @@
 import {
+	FileSystemAdapter,
 	MarkdownView,
 	Menu,
 	Notice,
@@ -21,6 +22,9 @@ import { FsCache } from "src/lib/cache/FsCache";
 import { QuickShareSideView } from "src/ui/QuickShareSideView";
 import { writable } from "svelte/store";
 import { setActiveMdFile } from "src/lib/stores/ActiveMdFile";
+import * as fs from "fs";
+
+import { spawnSync } from "child_process";
 
 const { subscribe, set: setPluginStore } = writable<NoteSharingPlugin>(null);
 
@@ -182,10 +186,42 @@ export default class NoteSharingPlugin extends Plugin {
 		}
 	}
 
+	/**
+	 * Allow for shelling out to obsidian-export to include included files, this is
+	 * */
+	async getNoteContents(file: TFile): Promise<string> {
+		const isMobile = false;
+		const useObsidianExport = true;
+		const obsidianExportPath = "/Users/joshuacoles/.cargo/bin/obsidian-export";
+
+		if (!isMobile && useObsidianExport && fs.existsSync(obsidianExportPath)) {
+			const adapter = app.vault.adapter;
+			if (adapter instanceof FileSystemAdapter) {
+				const basePath = adapter.getBasePath();
+				const fileFullPath = adapter.getFullPath(file.path);
+
+				const processResult = spawnSync(
+					obsidianExportPath,
+					["--start-at", fileFullPath, basePath, '/dev/stdout']
+				);
+
+				if (processResult.status !== 0) {
+					throw new Error("AHH")
+				}
+
+				return processResult.stdout.toString()
+			} else {
+				return await this.app.vault.read(file);
+			}
+		} else {
+			return await this.app.vault.read(file)
+		}
+	}
+
 	async shareNote(file: TFile) {
 		const { setFrontmatterKeys } = useFrontmatterHelper(this.app);
 
-		const body = await this.app.vault.read(file);
+		const body = await this.getNoteContents(file);
 		const title = this.settings.shareFilenameAsTitle
 			? file.basename
 			: undefined;
@@ -196,7 +232,7 @@ export default class NoteSharingPlugin extends Plugin {
 				if (this.settings.useFrontmatter) {
 					const datetime = moment().format(
 						this.settings.frontmatterDateFormat ||
-							DEFAULT_SETTINGS.frontmatterDateFormat
+						DEFAULT_SETTINGS.frontmatterDateFormat
 					);
 					setFrontmatterKeys(file, {
 						url: `"${res.view_url}"`,
